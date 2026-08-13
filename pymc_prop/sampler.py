@@ -15,9 +15,10 @@ from pymc_prop.fuse import (
     fuse_adaptive_step,
     fuse_initial_step,
 )
-from pymc_prop.particles import initialize_particles, time_step
+from pymc_prop.particles import initialize_particles, time_step, scaled_drift
 from pymc_prop.points import PointMapper
 from pymc_prop.scoring import LogScore, ScoringRule
+from pymc_prop.diagnostics import compute_kgd_squared, get_bandwidth, imq_kernel
 
 
 def run_sampler(
@@ -32,6 +33,10 @@ def run_sampler(
     random_seed: int | None,
     r_eps: float = 1e-5,
     fuse_diagnostics: dict[str, list[float]] | None = None,
+    flow_stats: dict[str, list[float]] = None,
+    kgd_interval: int | None = None,
+    bandwidth: float | None = None,
+    biased: bool = False,
 ) -> np.ndarray:
     """Run the PrO particle simulation loop.
 
@@ -74,16 +79,27 @@ def run_sampler(
 
     retained: List[np.ndarray] = []
 
-    for step in range(tune + n_steps):
-        # compile_drift_for_logscore -> time_step
-        if drift_fn is not None:
-            wgf_grad, prior_grad = drift_fn(particles)
-        else:
-            assert wgf_fn is not None
-            wgf_grad = wgf_fn(particles)
-            assert batched_prior_grad_fn is not None
-            prior_grad = np.asarray(batched_prior_grad_fn(particles), dtype=float)
+    initial_diffs = particles[:, None, :] - particles[None, :, :]
+    initial_sq_dists = np.sum(initial_diffs**2, axis=-1)
+    bandwidth = get_bandwidth(initial_sq_dists, bandwidth)
 
+    def evaluate_gradients(current_particles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Evaluate both gradient components at one particle cloud."""
+        if drift_fn is not None:
+            return drift_fn(current_particles)
+
+        assert wgf_fn is not None
+        assert batched_prior_grad_fn is not None
+        current_wgf_grad = wgf_fn(current_particles)
+        current_prior_grad = np.asarray(
+            batched_prior_grad_fn(current_particles), dtype=float
+        )
+        return current_wgf_grad, current_prior_grad
+
+    total_steps = tune + n_steps
+    wgf_grad, prior_grad = evaluate_gradients(particles)
+
+    for step in range(total_steps):
         if use_fuse:
             if fuse_state is None:
                 # t = 0: η_0 = r_ε, freeze reference half-step x_{1/2}
@@ -113,8 +129,42 @@ def run_sampler(
             particles, prior_grad, wgf_grad, step_size, learning_rate, rng
         )
 
+        kgd_due = (
+            flow_stats is not None
+            and kgd_interval is not None
+            and step >= tune
+            and (step - tune) % kgd_interval == 0
+        )
+        has_next_step = step + 1 < total_steps
+
+        # Evaluate at x[t+1]. These gradients give an aligned KGD for the
+        # updated cloud and are cached for the next Euler-Maruyama step.
+        if has_next_step or kgd_due:
+            next_wgf_grad, next_prior_grad = evaluate_gradients(particles)
+
+        if flow_stats is not None and kgd_interval is not None and step>= tune:
+            if kgd_due:
+                potential_gradient = scaled_drift(
+                    next_wgf_grad, next_prior_grad, learning_rate
+                )
+                score = -potential_gradient
+                kgd_squared = compute_kgd_squared(
+                    particles,
+                    score,
+                    kernel_fn=imq_kernel,
+                    bandwidth=bandwidth,
+                    biased=biased,
+                )
+            else:
+                kgd_squared = np.nan
+
+            flow_stats.setdefault("kgd_squared", []).append(kgd_squared)
+
         if step >= tune:
             retained.append(particles.copy())
+
+        if has_next_step:
+            wgf_grad, prior_grad = next_wgf_grad, next_prior_grad
 
     if retained:
         return np.stack(retained, axis=0)

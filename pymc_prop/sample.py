@@ -116,6 +116,9 @@ def sample_pro(
     include_log_likelihood: bool = True,
     include_observed_data: bool = True,
     include_sample_stats: bool = True,
+    kgd_interval: int | None = None,
+    bandwidth: float | None = None,
+    biased: bool = False,
     datatree_kwargs: dict[str, Any] | None = None,
 ) -> DataTree:
     """Run the PrO particle sampler on a PyMC model.
@@ -168,6 +171,18 @@ def sample_pro(
         Control which optional DataTree groups are populated. Set
         ``include_log_likelihood=False`` to skip the post-sampling logp pass
         when only particle trajectories are needed.
+    kgd_interval
+        Compute ``sample_stats.kgd_squared`` on every given retained step.
+        ``None`` disables KGD. The score is evaluated at the retained,
+        post-update particle cloud and cached for the following sampler step.
+    bandwidth
+        Positive kernel denominator used directly in KGD. When omitted, it is
+        fixed before sampling using the initial particle cloud and the median
+        heuristic ``median(||x_i - x_j||²) / log(n_particles)``.
+    biased
+        If ``True``, use the non-negative V-statistic. If ``False``, use the
+        diagonal-free U-statistic, whose finite-sample squared estimate may be
+        negative and is stored without clipping.
     datatree_kwargs
         Extra keyword arguments forwarded to the internal DataTree builder
         (e.g. ``name``). ``coords``, ``dims``, and ``include_*`` flags should
@@ -191,6 +206,15 @@ def sample_pro(
         raise ValueError("n_steps must be positive.")
     if tune < 0:
         raise ValueError("tune must be non-negative.")
+    if kgd_interval is not None:
+        if isinstance(kgd_interval, (bool, np.bool_)) or not isinstance(
+            kgd_interval, (int, np.integer)
+        ):
+            raise ValueError("kgd_interval must be a positive integer.")
+        if kgd_interval <= 0:
+            raise ValueError("kgd_interval must be a positive integer.")
+    if bandwidth is not None and (not np.isfinite(bandwidth) or bandwidth <= 0):
+        raise ValueError("bandwidth must be finite and positive when provided.")
     if step_size is None:
         if r_eps <= 0:
             raise ValueError("r_eps must be positive when step_size is None (FUSE).")
@@ -209,6 +233,8 @@ def sample_pro(
 
     mapper = make_point_mapper(model)
 
+    flow_stats: dict[str, list[float]] = {}
+
     fuse_diagnostics: dict[str, list[float]] | None = (
         {} if step_size is None else None
     )
@@ -224,6 +250,10 @@ def sample_pro(
         random_seed=random_seed,
         r_eps=r_eps,
         fuse_diagnostics=fuse_diagnostics,
+        flow_stats=flow_stats,
+        kgd_interval=kgd_interval,
+        bandwidth=bandwidth,
+        biased=biased,
     )
 
     fuse_stats = (
@@ -245,6 +275,7 @@ def sample_pro(
         include_sample_stats=include_sample_stats,
         datatree_kwargs=datatree_kwargs,
         fuse_stats=fuse_stats,
+        flow_stats=flow_stats,
     )
 
     return dt

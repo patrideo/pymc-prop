@@ -172,6 +172,7 @@ def _compute_sample_stats(
     learning_rate: float,
     *,
     fuse_stats: dict[str, np.ndarray] | None = None,
+    flow_stats: dict[str, list[float]] | None = None,
     mixture_log_predictive: dict[str, np.ndarray] | None = None,
 ) -> dict[str, np.ndarray]:
     """PrO-specific diagnostics derived from retained particle clouds."""
@@ -201,6 +202,10 @@ def _compute_sample_stats(
 
     if fuse_stats:
         for name, values in fuse_stats.items():
+            stats[name] = _broadcast_draw_stat(np.asarray(values, dtype=float), n_particles)
+
+    if flow_stats:
+        for name, values in flow_stats.items():
             stats[name] = _broadcast_draw_stat(np.asarray(values, dtype=float), n_particles)
 
     if mixture_log_predictive:
@@ -357,7 +362,7 @@ def _pro_to_datatree(
     model=None,
     mapper: PointMapper,
     tune: int,
-    learning_rate: float,
+    learning_rate: float,   
     coords: dict[str, Any] | None = None,
     dims: dict[str, list[str]] | None = None,
     include_log_likelihood: bool = True,
@@ -365,6 +370,7 @@ def _pro_to_datatree(
     include_sample_stats: bool = True,
     datatree_kwargs: dict[str, Any] | None = None,
     fuse_stats: dict[str, np.ndarray] | None = None,
+    flow_stats: dict[str, list[float]] | None = None,
 ) -> DataTree:
     """Package retained PrO particles as an ArviZ DataTree.
 
@@ -405,6 +411,7 @@ def _pro_to_datatree(
             log_likelihood,
             learning_rate,
             fuse_stats=fuse_stats,
+            flow_stats=flow_stats,
             mixture_log_predictive=mixture_log_predictive or None,
         )
 
