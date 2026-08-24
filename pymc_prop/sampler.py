@@ -18,7 +18,7 @@ from pymc_prop.fuse import (
 from pymc_prop.particles import initialize_particles, time_step, scaled_drift
 from pymc_prop.points import PointMapper
 from pymc_prop.scoring import LogScore, ScoringRule
-from pymc_prop.diagnostics import compute_kgd_squared, get_bandwidth, imq_kernel
+from pymc_prop.diagnostics import compute_kgd, get_bandwidth, imq_kernel
 
 
 def run_sampler(
@@ -33,10 +33,9 @@ def run_sampler(
     random_seed: int | None,
     r_eps: float = 1e-5,
     fuse_diagnostics: dict[str, list[float]] | None = None,
-    flow_stats: dict[str, list[float]] = None,
+    flow_stats: dict[str, list[float]] | None = None,
     kgd_interval: int | None = None,
-    bandwidth: float | None = None,
-    biased: bool = False,
+    kgd_bandwidth: float | None = None,
 ) -> np.ndarray:
     """Run the PrO particle simulation loop.
 
@@ -79,9 +78,13 @@ def run_sampler(
 
     retained: List[np.ndarray] = []
 
-    initial_diffs = particles[:, None, :] - particles[None, :, :]
-    initial_sq_dists = np.sum(initial_diffs**2, axis=-1)
-    bandwidth = get_bandwidth(initial_sq_dists, bandwidth)
+    kgd_enabled = flow_stats is not None and kgd_interval is not None
+    resolved_kgd_bandwidth: float | None = None
+    if kgd_enabled:
+        assert kgd_interval is not None
+        initial_diffs = particles[:, None, :] - particles[None, :, :]
+        initial_sq_dists = np.sum(initial_diffs**2, axis=-1)
+        resolved_kgd_bandwidth = get_bandwidth(initial_sq_dists, kgd_bandwidth)
 
     def evaluate_gradients(current_particles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Evaluate both gradient components at one particle cloud."""
@@ -130,8 +133,7 @@ def run_sampler(
         )
 
         kgd_due = (
-            flow_stats is not None
-            and kgd_interval is not None
+            kgd_enabled
             and step >= tune
             and (step - tune) % kgd_interval == 0
         )
@@ -142,23 +144,24 @@ def run_sampler(
         if has_next_step or kgd_due:
             next_wgf_grad, next_prior_grad = evaluate_gradients(particles)
 
-        if flow_stats is not None and kgd_interval is not None and step>= tune:
+        if kgd_enabled and step >= tune:
+            assert flow_stats is not None
             if kgd_due:
+                assert resolved_kgd_bandwidth is not None
                 potential_gradient = scaled_drift(
                     next_wgf_grad, next_prior_grad, learning_rate
                 )
                 score = -potential_gradient
-                kgd_squared = compute_kgd_squared(
+                kgd = compute_kgd(
                     particles,
                     score,
                     kernel_fn=imq_kernel,
-                    bandwidth=bandwidth,
-                    biased=biased,
+                    bandwidth=resolved_kgd_bandwidth,
                 )
             else:
-                kgd_squared = np.nan
+                kgd = np.nan
 
-            flow_stats.setdefault("kgd_squared", []).append(kgd_squared)
+            flow_stats.setdefault("kgd", []).append(kgd)
 
         if step >= tune:
             retained.append(particles.copy())
