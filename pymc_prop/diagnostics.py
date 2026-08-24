@@ -66,25 +66,20 @@ def imq_kernel(
     
     return K, cross_coeff, trace_term
 
-def compute_kgd_squared(
+def compute_kgd(
     particles: np.ndarray,
     score: np.ndarray,
-    kernel_fn: Callable = rbf_kernel,
+    kernel_fn: Callable = imq_kernel,
     *,
     bandwidth: float,
-    biased: bool = True,
 ) -> float:
-    """Estimate squared KGD from particles and their target score.
+    """Estimate KGD from particles and their target score.
 
     ``bandwidth`` is the positive denominator used directly by ``kernel_fn``.
     Bandwidth-selection policy belongs to the caller; use
     :func:`get_bandwidth` before calling this function when the median
     heuristic is desired. ``score`` must be ``grad(log q)`` evaluated at the
     corresponding rows of ``particles``.
-
-    The biased V-statistic is non-negative in exact arithmetic. The unbiased
-    U-statistic may be negative for a finite particle cloud, so this function
-    returns the raw squared estimate without clipping or taking a square root.
     """
     if not np.isfinite(bandwidth) or bandwidth <= 0:
         raise ValueError("bandwidth must be finite and positive.")
@@ -110,10 +105,6 @@ def compute_kgd_squared(
     #  Combine into the full Stein Kernel matrix (H)
     H = term1 + term23 + trace_term
 
-    if biased:
-        kgd_sq = np.mean(H)
-    else:
-        np.fill_diagonal(H, 0.0)
-        kgd_sq = np.sum(H) / (N * (N - 1))
+    kgd_sq = np.mean(H)
     
-    return float(kgd_sq)
+    return float(np.sqrt(max(kgd_sq, 0.0)))
