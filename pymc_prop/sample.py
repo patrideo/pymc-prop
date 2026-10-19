@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 import numpy as np
@@ -118,6 +118,7 @@ def sample_pro(
     include_sample_stats: bool = True,
     kgd_interval: int | None = None,
     kgd_bandwidth: float | None = None,
+    kgd_kernel: Callable | None = None,
     datatree_kwargs: dict[str, Any] | None = None,
 ) -> DataTree:
     """Run the PrO particle sampler on a PyMC model.
@@ -178,6 +179,9 @@ def sample_pro(
         Positive kernel denominator used directly in KGD. When omitted, it is
         fixed before sampling using the initial particle cloud and the median
         heuristic ``median(||x_i - x_j||²) / log(n_particles)``.
+    kgd_kernel
+        Kernel function used to evaluate KGD; defaults to :func:`~pymc_prop.diagnostics.imq_kernel`.
+        Can also be set to :func:`~pymc_prop.diagnostics.rbf_kernel` or a custom kernel function.
     datatree_kwargs
         Extra keyword arguments forwarded to the internal DataTree builder
         (e.g. ``name``). ``coords``, ``dims``, and ``include_*`` flags should
@@ -220,6 +224,11 @@ def sample_pro(
             raise ValueError(
                 "kgd_bandwidth must be finite and positive when provided."
             )
+    if kgd_kernel is not None:
+        if kgd_interval is None:
+            raise ValueError("kgd_kernel requires kgd_interval to be set.")
+        if not callable(kgd_kernel):
+            raise ValueError("kgd_kernel must be a callable kernel function.")
     if step_size is None:
         if r_eps <= 0:
             raise ValueError("r_eps must be positive when step_size is None (FUSE).")
@@ -260,6 +269,7 @@ def sample_pro(
         flow_stats=flow_stats,
         kgd_interval=kgd_interval,
         kgd_bandwidth=kgd_bandwidth,
+        kgd_kernel=kgd_kernel,
     )
 
     fuse_stats = (

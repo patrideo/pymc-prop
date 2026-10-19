@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Callable, List
 
 import numpy as np
 
@@ -36,6 +36,7 @@ def run_sampler(
     flow_stats: dict[str, list[float]] | None = None,
     kgd_interval: int | None = None,
     kgd_bandwidth: float | None = None,
+    kgd_kernel: Callable | None = None,
 ) -> np.ndarray:
     """Run the PrO particle simulation loop.
 
@@ -152,10 +153,11 @@ def run_sampler(
                     next_wgf_grad, next_prior_grad, learning_rate
                 )
                 score = -potential_gradient
+                kernel_to_use = imq_kernel if kgd_kernel is None else kgd_kernel
                 kgd = compute_kgd(
                     particles,
                     score,
-                    kernel_fn=imq_kernel,
+                    kernel_fn=kernel_to_use,
                     bandwidth=resolved_kgd_bandwidth,
                 )
             else:

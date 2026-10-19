@@ -3,7 +3,7 @@ import pymc as pm
 import pytest
 
 import pymc_prop.sampler as sampler_module
-from pymc_prop.diagnostics import compute_kgd, get_bandwidth, imq_kernel
+from pymc_prop.diagnostics import compute_kgd, get_bandwidth, imq_kernel, rbf_kernel
 from pymc_prop.sample import sample_pro
 
 
@@ -132,6 +132,11 @@ def test_sample_pro_validates_kgd_options():
             {"kgd_interval": 1, "kgd_bandwidth": 0.0},
             "finite and positive",
         ),
+        ({"kgd_kernel": rbf_kernel}, "requires kgd_interval"),
+        (
+            {"kgd_interval": 1, "kgd_kernel": "not_callable"},
+            "callable",
+        ),
     )
 
     for kwargs, match in cases:
@@ -191,3 +196,42 @@ def test_kgd_disabled_skips_bandwidth_computation(monkeypatch):
     )
 
     assert "kgd" not in dt.sample_stats
+
+
+def test_sample_pro_records_kgd_with_custom_kernel():
+    with pm.Model() as model:
+        location = pm.Normal("location", mu=0.0, sigma=1.0)
+        pm.Normal("y", mu=location, sigma=1.0, observed=np.array([0.0]))
+
+    dt_imq = sample_pro(
+        model=model,
+        n_particles=4,
+        n_steps=4,
+        tune=1,
+        step_size=1e-3,
+        random_seed=42,
+        include_log_likelihood=False,
+        kgd_interval=1,
+        kgd_bandwidth=1.0,
+        kgd_kernel=imq_kernel,
+    )
+
+    dt_rbf = sample_pro(
+        model=model,
+        n_particles=4,
+        n_steps=4,
+        tune=1,
+        step_size=1e-3,
+        random_seed=42,
+        include_log_likelihood=False,
+        kgd_interval=1,
+        kgd_bandwidth=1.0,
+        kgd_kernel=rbf_kernel,
+    )
+
+    kgd_imq = dt_imq.sample_stats["kgd"].isel(chain=0).values
+    kgd_rbf = dt_rbf.sample_stats["kgd"].isel(chain=0).values
+
+    assert np.all(np.isfinite(kgd_imq))
+    assert np.all(np.isfinite(kgd_rbf))
+    assert not np.allclose(kgd_imq, kgd_rbf)
