@@ -169,37 +169,6 @@ def run_sampler(
 
             flow_stats.setdefault("kgd", []).append(kgd)
 
-        kgd_due = (
-            flow_stats is not None
-            and kgd_interval is not None
-            and step >= tune
-            and (step - tune) % kgd_interval == 0
-        )
-        has_next_step = step + 1 < total_steps
-
-        # Evaluate at x[t+1]. These gradients give an aligned KGD for the
-        # updated cloud and are cached for the next Euler-Maruyama step.
-        if has_next_step or kgd_due:
-            next_wgf_grad, next_prior_grad = evaluate_gradients(particles)
-
-        if flow_stats is not None and kgd_interval is not None and step>= tune:
-            if kgd_due:
-                potential_gradient = scaled_drift(
-                    next_wgf_grad, next_prior_grad, learning_rate
-                )
-                score = -potential_gradient
-                kgd_squared = compute_kgd_squared(
-                    particles,
-                    score,
-                    kernel_fn=imq_kernel,
-                    bandwidth=bandwidth,
-                    biased=biased,
-                )
-            else:
-                kgd_squared = np.nan
-
-            flow_stats.setdefault("kgd_squared", []).append(kgd_squared)
-
         if step >= tune:
             retained.append(particles.copy())
 
